@@ -2364,6 +2364,9 @@
         let currentDuelBet = 0;
         let isDuelStarted = false;
         let deferredPrompt = null;
+        const marketApiBase = '/api/market';
+        let marketTotalItems = 0;
+        let marketOnlineEnabled = true;
         const defaultAvatars = [
             { id: "default-1", label: "😎" },
             { id: "default-2", label: "🦊" },
@@ -2591,6 +2594,7 @@
             loadGameData();
             renderAll();
             updateUI();
+            refreshMarketFromServer(false);
             syncAudioButtons();
             
             // Запускаем музыку
@@ -3058,6 +3062,72 @@
             updateAchievementsProgress();
         }
 
+
+        async function requestMarketApi(action, payload = null, method = 'GET') {
+            const url = new URL(marketApiBase, window.location.origin);
+            url.searchParams.set('action', action);
+
+            const options = { method };
+            if (payload && method === 'GET') {
+                Object.entries(payload).forEach(([key, value]) => {
+                    if (value !== undefined && value !== null && value !== '') {
+                        url.searchParams.set(key, value);
+                    }
+                });
+            } else if (payload) {
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify(payload);
+            }
+
+            const response = await fetch(url.toString(), options);
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Ошибка API рынка');
+            }
+            return data;
+        }
+
+        function mapOnlineListing(item) {
+            return {
+                id: item.id,
+                name: item.name,
+                rarity: item.rarity,
+                type: item.type,
+                price: item.price,
+                seller: item.seller_name,
+                sellerId: item.seller_id,
+                emoji: item.emoji || '🎯',
+                marketSource: 'online'
+            };
+        }
+
+        async function refreshMarketFromServer(showToast = true) {
+            const marketSearchInput = document.getElementById('market-search');
+            const search = marketSearchInput ? marketSearchInput.value.trim() : '';
+
+            try {
+                const result = await requestMarketApi('list', {
+                    search,
+                    page: marketPage,
+                    perPage: marketPerPage
+                }, 'GET');
+
+                marketItems = (result.items || []).map(mapOnlineListing);
+                marketTotalItems = result.total || marketItems.length;
+                marketOnlineEnabled = true;
+                renderMarket();
+                if (showToast) {
+                    showNotification('Онлайн-рынок обновлён', 'success');
+                }
+            } catch (error) {
+                marketOnlineEnabled = false;
+                if (showToast) {
+                    showNotification(`Онлайн-рынок недоступен: ${error.message}`, 'warning');
+                }
+                renderMarket();
+            }
+        }
+
         // ==================== РЕНДЕРИНГ ====================
         function renderAll() {
             renderInventory();
@@ -3141,7 +3211,8 @@
                     item.type.toLowerCase().includes(search)
                 );
             }
-            const totalPages = Math.max(1, Math.ceil(itemsToShow.length / marketPerPage));
+            const baseCount = marketOnlineEnabled ? marketTotalItems : itemsToShow.length;
+            const totalPages = Math.max(1, Math.ceil(baseCount / marketPerPage));
             marketPage = Math.min(Math.max(marketPage, 1), totalPages);
             const start = (marketPage - 1) * marketPerPage;
             const pagedItems = itemsToShow.slice(start, start + marketPerPage);
@@ -3178,7 +3249,8 @@
 
             const pageInfo = document.getElementById('market-page-info');
             if (pageInfo) {
-                pageInfo.textContent = `Страница ${marketPage} из ${totalPages}`;
+                const onlineLabel = marketOnlineEnabled ? ' • онлайн' : ' • офлайн';
+                pageInfo.textContent = `Страница ${marketPage} из ${totalPages}${onlineLabel}`;
             }
         }
 
@@ -4144,24 +4216,41 @@
             saveGameData();
         }
 
-        function buyItem(itemId) {
+        async function buyItem(itemId) {
             const item = marketItems.find(i => i.id === itemId);
             if (!item) return;
-            
+
             if (gameState.silver < item.price) {
                 showNotification('Недостаточно серебра!', 'error');
                 return;
             }
-            
+
+            if (item.marketSource === 'online') {
+                try {
+                    const result = await requestMarketApi('buy', {
+                        listingId: item.id,
+                        buyerId: gameState.profile.id,
+                        buyerName: gameState.profile.name
+                    }, 'POST');
+
+                    if (!result.success) {
+                        throw new Error(result.message || 'Лот уже куплен');
+                    }
+                } catch (error) {
+                    showNotification(error.message, 'error');
+                    await refreshMarketFromServer(false);
+                    return;
+                }
+            }
+
             gameState.silver -= item.price;
             const newItem = createInventoryItem(item, { canSell: true, canCraft: true, source: 'market' });
             gameState.inventory.push(newItem);
             marketItems = marketItems.filter(i => i.id !== itemId);
             gainExp(20);
-            
-            // Обновляем достижение "Коллекционер"
+
             updateAchievementProgress(2, 1);
-            
+
             showNotification(`Куплено за ${item.price} серебра!`, 'success');
             updateUI();
             renderInventory();
@@ -4169,43 +4258,73 @@
             saveGameData();
         }
 
-        function addToMarket(itemId) {
+        async function addToMarket(itemId) {
             const item = gameState.inventory.find(i => i.id === itemId);
             if (!item || !item.canSell) {
                 showNotification('Этот предмет нельзя продать!', 'error');
                 return;
             }
-            
+
             const price = prompt('Введите цену в серебре:', item.price);
             if (!price || isNaN(price)) return;
-            
-            const marketItem = {
-                ...item,
-                id: Date.now(),
-                price: parseInt(price),
-                seller: 'Вы'
-            };
-            
-            marketItems.push(marketItem);
+
+            const normalizedPrice = parseInt(price, 10);
+            if (normalizedPrice <= 0) {
+                showNotification('Цена должна быть больше нуля', 'error');
+                return;
+            }
+
+            if (marketOnlineEnabled) {
+                try {
+                    await requestMarketApi('create', {
+                        name: item.name,
+                        rarity: item.rarity,
+                        type: item.type,
+                        price: normalizedPrice,
+                        sellerName: gameState.profile.name,
+                        sellerId: gameState.profile.id,
+                        emoji: item.emoji || '🎯'
+                    }, 'POST');
+                } catch (error) {
+                    showNotification(`Не удалось выставить лот: ${error.message}`, 'error');
+                    return;
+                }
+            } else {
+                const marketItem = {
+                    ...item,
+                    id: Date.now(),
+                    price: normalizedPrice,
+                    seller: gameState.profile.name
+                };
+                marketItems.push(marketItem);
+            }
+
             gameState.inventory = gameState.inventory.filter(i => i.id !== itemId);
-            
+
             showNotification('Предмет выставлен на рынок!', 'success');
             renderInventory();
-            renderMarket();
+            if (marketOnlineEnabled) {
+                await refreshMarketFromServer(false);
+            } else {
+                renderMarket();
+            }
             closeModal('item-modal');
             saveGameData();
         }
 
-        function searchMarket() {
+        async function searchMarket() {
             marketPage = 1;
-            renderMarket();
+            if (marketOnlineEnabled) {
+                await refreshMarketFromServer(false);
+            } else {
+                renderMarket();
+            }
             playSound('click');
         }
 
-        function refreshMarket() {
+        async function refreshMarket() {
             marketPage = 1;
-            showNotification('Рынок обновлен!', 'success');
-            renderMarket();
+            await refreshMarketFromServer(true);
         }
 
         function sellAllItems() {
