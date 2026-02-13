@@ -3075,13 +3075,18 @@
                 ? [marketResolvedApiBase, ...marketApiCandidates.filter(base => base !== marketResolvedApiBase)]
                 : [...marketApiCandidates];
 
+            const isGetRequest = method === 'GET';
             let lastError = new Error('API рынка недоступен');
-            for (const base of candidates) {
+
+            for (let index = 0; index < candidates.length; index++) {
+                const base = candidates[index];
+                const hasNextCandidate = index < candidates.length - 1;
+
                 try {
                     const url = new URL(base, window.location.origin);
                     url.searchParams.set('action', action);
 
-                    if (payload && method === 'GET') {
+                    if (payload && isGetRequest) {
                         Object.entries(payload).forEach(([key, value]) => {
                             if (value !== undefined && value !== null && value !== '') {
                                 url.searchParams.set(key, value);
@@ -3094,16 +3099,22 @@
 
                     if (!response.ok) {
                         const isRouteIssue = response.status === 404 || response.status === 405;
-                        if (isRouteIssue) {
-                            throw new Error(`Маршрут API ${base} недоступен (${response.status})`);
-                        }
-                        throw new Error(data.error || `Ошибка API рынка (${response.status})`);
+                        const message = isRouteIssue
+                            ? `Маршрут API ${base} недоступен (${response.status})`
+                            : (data.error || `Ошибка API рынка (${response.status})`);
+                        const error = new Error(message);
+                        error.isRouteIssue = isRouteIssue;
+                        throw error;
                     }
 
                     marketResolvedApiBase = base;
                     return data;
                 } catch (error) {
                     lastError = error;
+                    const canRetryOnNextRoute = hasNextCandidate && (isGetRequest || error.isRouteIssue === true);
+                    if (!canRetryOnNextRoute) {
+                        throw lastError;
+                    }
                 }
             }
 
