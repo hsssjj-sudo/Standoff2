@@ -3,11 +3,7 @@
   functions = "netlify/functions"
 
 [[redirects]]
-  from = "/"
-  to = "/патчада.html"
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
   status = 200
-
-[[redirects]]
-  from = "/api/market"
-  to = "/.netlify/functions/market"
-  status = 200
+  force = true

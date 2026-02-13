@@ -2364,7 +2364,8 @@
         let currentDuelBet = 0;
         let isDuelStarted = false;
         let deferredPrompt = null;
-        const marketApiBase = '/api/market';
+        const marketApiCandidates = ['/api/market', '/.netlify/functions/market'];
+        let marketResolvedApiBase = null;
         let marketTotalItems = 0;
         let marketOnlineEnabled = true;
         const defaultAvatars = [
@@ -2395,7 +2396,7 @@
             const manifest = {
                 name: "Standoff 2 - Offline",
                 short_name: "Standoff2",
-                start_url: "./stanok.html",
+                start_url: "./патчада.html",
                 scope: "./",
                 display: "standalone",
                 background_color: "#0a0a1a",
@@ -2423,7 +2424,7 @@
                 const CACHE_NAME = 'standoff2-offline-v2';
                 const ASSETS = [
                   './',
-                  './stanok.html'
+                  './патчада.html'
                 ];
 
                 self.addEventListener('install', (event) => {
@@ -2457,7 +2458,7 @@
                           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
                           return response;
                         })
-                        .catch(() => caches.match('./stanok.html'))
+                        .catch(() => caches.match('./патчада.html'))
                     );
                     return;
                   }
@@ -3064,27 +3065,60 @@
 
 
         async function requestMarketApi(action, payload = null, method = 'GET') {
-            const url = new URL(marketApiBase, window.location.origin);
-            url.searchParams.set('action', action);
-
             const options = { method };
-            if (payload && method === 'GET') {
-                Object.entries(payload).forEach(([key, value]) => {
-                    if (value !== undefined && value !== null && value !== '') {
-                        url.searchParams.set(key, value);
-                    }
-                });
-            } else if (payload) {
+            if (payload && method !== 'GET') {
                 options.headers = { 'Content-Type': 'application/json' };
                 options.body = JSON.stringify(payload);
             }
 
-            const response = await fetch(url.toString(), options);
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || 'Ошибка API рынка');
+            const candidates = marketResolvedApiBase
+                ? [marketResolvedApiBase, ...marketApiCandidates.filter(base => base !== marketResolvedApiBase)]
+                : [...marketApiCandidates];
+
+            const isGetRequest = method === 'GET';
+            let lastError = new Error('API рынка недоступен');
+
+            for (let index = 0; index < candidates.length; index++) {
+                const base = candidates[index];
+                const hasNextCandidate = index < candidates.length - 1;
+
+                try {
+                    const url = new URL(base, window.location.origin);
+                    url.searchParams.set('action', action);
+
+                    if (payload && isGetRequest) {
+                        Object.entries(payload).forEach(([key, value]) => {
+                            if (value !== undefined && value !== null && value !== '') {
+                                url.searchParams.set(key, value);
+                            }
+                        });
+                    }
+
+                    const response = await fetch(url.toString(), options);
+                    const data = await response.json().catch(() => ({}));
+
+                    if (!response.ok) {
+                        const isRouteIssue = response.status === 404 || response.status === 405;
+                        const message = isRouteIssue
+                            ? `Маршрут API ${base} недоступен (${response.status})`
+                            : (data.error || `Ошибка API рынка (${response.status})`);
+                        const error = new Error(message);
+                        error.isRouteIssue = isRouteIssue;
+                        throw error;
+                    }
+
+                    marketResolvedApiBase = base;
+                    return data;
+                } catch (error) {
+                    lastError = error;
+                    const canRetryOnNextRoute = hasNextCandidate && (isGetRequest || error.isRouteIssue === true);
+                    if (!canRetryOnNextRoute) {
+                        throw lastError;
+                    }
+                }
             }
-            return data;
+
+            throw lastError;
         }
 
         function mapOnlineListing(item) {
