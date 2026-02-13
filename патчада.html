@@ -2364,7 +2364,8 @@
         let currentDuelBet = 0;
         let isDuelStarted = false;
         let deferredPrompt = null;
-        const marketApiBase = '/api/market';
+        const marketApiCandidates = ['/api/market', '/.netlify/functions/market'];
+        let marketResolvedApiBase = null;
         let marketTotalItems = 0;
         let marketOnlineEnabled = true;
         const defaultAvatars = [
@@ -3064,27 +3065,49 @@
 
 
         async function requestMarketApi(action, payload = null, method = 'GET') {
-            const url = new URL(marketApiBase, window.location.origin);
-            url.searchParams.set('action', action);
-
             const options = { method };
-            if (payload && method === 'GET') {
-                Object.entries(payload).forEach(([key, value]) => {
-                    if (value !== undefined && value !== null && value !== '') {
-                        url.searchParams.set(key, value);
-                    }
-                });
-            } else if (payload) {
+            if (payload && method !== 'GET') {
                 options.headers = { 'Content-Type': 'application/json' };
                 options.body = JSON.stringify(payload);
             }
 
-            const response = await fetch(url.toString(), options);
-            const data = await response.json();
-            if (!response.ok) {
-                throw new Error(data.error || 'Ошибка API рынка');
+            const candidates = marketResolvedApiBase
+                ? [marketResolvedApiBase, ...marketApiCandidates.filter(base => base !== marketResolvedApiBase)]
+                : [...marketApiCandidates];
+
+            let lastError = new Error('API рынка недоступен');
+            for (const base of candidates) {
+                try {
+                    const url = new URL(base, window.location.origin);
+                    url.searchParams.set('action', action);
+
+                    if (payload && method === 'GET') {
+                        Object.entries(payload).forEach(([key, value]) => {
+                            if (value !== undefined && value !== null && value !== '') {
+                                url.searchParams.set(key, value);
+                            }
+                        });
+                    }
+
+                    const response = await fetch(url.toString(), options);
+                    const data = await response.json().catch(() => ({}));
+
+                    if (!response.ok) {
+                        const isRouteIssue = response.status === 404 || response.status === 405;
+                        if (isRouteIssue) {
+                            throw new Error(`Маршрут API ${base} недоступен (${response.status})`);
+                        }
+                        throw new Error(data.error || `Ошибка API рынка (${response.status})`);
+                    }
+
+                    marketResolvedApiBase = base;
+                    return data;
+                } catch (error) {
+                    lastError = error;
+                }
             }
-            return data;
+
+            throw lastError;
         }
 
         function mapOnlineListing(item) {

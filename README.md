@@ -26,6 +26,16 @@
 - `SUPABASE_URL` — URL вашего Supabase-проекта.
 - `SUPABASE_SERVICE_ROLE_KEY` — service role key (хранить только на сервере/в Netlify).
 
+## Почему рынок может показываться офлайн
+
+Если сайт запущен не через Netlify, маршрут `/api/market` может отсутствовать и давать 404.
+Теперь клиент пробует оба пути API:
+- `/api/market` (деплой Netlify с редиректом)
+- `/.netlify/functions/market` (локальный `netlify dev`)
+
+Если оба пути недоступны, рынок корректно уходит в офлайн-режим.
+Также проверьте, что заданы `SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY`.
+
 ## Запуск базы
 
 1. Откройте SQL Editor в Supabase.
