@@ -2395,7 +2395,7 @@
             const manifest = {
                 name: "Standoff 2 - Offline",
                 short_name: "Standoff2",
-                start_url: "./stanok.html",
+                start_url: "./патчада.html",
                 scope: "./",
                 display: "standalone",
                 background_color: "#0a0a1a",
@@ -2423,7 +2423,7 @@
                 const CACHE_NAME = 'standoff2-offline-v2';
                 const ASSETS = [
                   './',
-                  './stanok.html'
+                  './патчада.html'
                 ];
 
                 self.addEventListener('install', (event) => {
@@ -2457,7 +2457,7 @@
                           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
                           return response;
                         })
-                        .catch(() => caches.match('./stanok.html'))
+                        .catch(() => caches.match('./патчада.html'))
                     );
                     return;
                   }
